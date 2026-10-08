@@ -1,0 +1,80 @@
+name: Publish wheels
+
+# 由 talib.yml / sageattention.yml 呼叫：把建好的 wheel 加進同一個 Release（不刪除舊檔），
+# 有上傳才重新產生 Pages 索引。
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      title:
+        type: string
+        required: true
+      notes:
+        type: string
+        required: true
+      install:
+        description: "安裝指令，{index} 會換成本倉庫的索引網址"
+        type: string
+        required: true
+      artifacts:
+        description: "要上傳的 artifact 名稱 pattern"
+        type: string
+        required: true
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      uploaded: ${{ steps.upload.outputs.uploaded }}
+    steps:
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: ${{ inputs.artifacts }}
+          merge-multiple: true
+          path: dist
+
+      - id: upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          TITLE: ${{ inputs.title }}
+          NOTES: ${{ inputs.notes }}
+          INSTALL: ${{ inputs.install }}
+        run: |
+          shopt -s nullglob
+          wheels=(dist/*.whl)
+          if [ ${#wheels[@]} -eq 0 ]; then
+            echo "::warning::沒有任何 wheel 建置成功，略過發布"
+            echo "uploaded=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          owner="${GITHUB_REPOSITORY%%/*}"
+          index="https://${owner,,}.github.io/${GITHUB_REPOSITORY#*/}"
+          # shellcheck disable=SC2016 # 反引號是 Markdown 程式碼區塊
+          body="$(printf '%s\n\n```\n%s\n```\n' "$NOTES" "${INSTALL//\{index\}/$index}")"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TITLE" --notes "$body"
+          else
+            gh release create "$TAG" --title "$TITLE" --notes "$body"
+          fi
+          gh release upload "$TAG" "${wheels[@]}" --clobber
+          printf -- '- %s\n' "${wheels[@]##*/}" >> "$GITHUB_STEP_SUMMARY"
+          echo "uploaded=true" >> "$GITHUB_OUTPUT"
+
+  index:
+    needs: release
+    if: needs.release.outputs.uploaded == 'true'
+    uses: ./.github/workflows/update-index.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

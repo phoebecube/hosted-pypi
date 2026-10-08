@@ -4,7 +4,10 @@ Generate PEP 503 compliant PyPI Simple Repository Index from GitHub Releases.
 
 Scans all releases in a GitHub repository, finds .whl and .tar.gz assets,
 and generates static HTML pages for use as a pip-compatible package index
-served via GitHub Pages.
+served via GitHub Pages:
+
+    /simple/   every package
+    /cuXXX/    only wheels whose local version is +cuXXX (like PyTorch's indexes)
 
 Usage:
     GITHUB_REPOSITORY=owner/repo GITHUB_TOKEN=xxx python generate_index.py
@@ -157,11 +160,13 @@ def collect_packages(releases: list) -> tuple:
                 continue
             seen_files.add(file_key)
 
+            digest = asset.get("digest") or ""
             packages[norm_name].append(
                 {
                     "filename": filename,
                     "url": asset["browser_download_url"],
                     "version": version,
+                    "sha256": digest[7:] if digest.startswith("sha256:") else "",
                 }
             )
 
@@ -172,9 +177,20 @@ def collect_packages(releases: list) -> tuple:
     return packages, latest_versions
 
 
-def generate_simple_index(packages: dict, output_dir: Path):
+def cuda_variants(packages: dict) -> dict:
+    """{'cu130': {name: [files with +cu130 local version]}, ...}"""
+    variants = defaultdict(lambda: defaultdict(list))
+    for name, files in packages.items():
+        for fi in files:
+            m = re.search(r"\+(cu\d+)$", fi["version"])
+            if m:
+                variants[m.group(1)][name].append(fi)
+    return variants
+
+
+def generate_simple_index(packages: dict, output_dir: Path, subdir: str = "simple"):
     """Generate PEP 503 Simple Repository API pages."""
-    simple_dir = output_dir / "simple"
+    simple_dir = output_dir / subdir
     simple_dir.mkdir(parents=True, exist_ok=True)
 
     # /simple/index.html  ──  root index listing all projects
@@ -205,7 +221,7 @@ def generate_simple_index(packages: dict, output_dir: Path):
             f.write("</head>\n<body>\n")
             f.write(f"  <h1>Links for {html.escape(name)}</h1>\n")
             for fi in sorted(files, key=lambda x: x["filename"]):
-                href = fi["url"]
+                href = fi["url"] + (f"#sha256={fi['sha256']}" if fi["sha256"] else "")
                 safe_fn = html.escape(fi["filename"])
                 safe_href = html.escape(href, quote=True)
                 f.write(f'  <a href="{safe_href}">{safe_fn}</a><br>\n')
@@ -217,6 +233,7 @@ def generate_landing_page(
     latest_versions: dict,
     repo: str,
     output_dir: Path,
+    variants: list = (),
 ) -> None:
     """Generate a modern light-themed landing page for the private PyPI index."""
     repo_owner, repo_name = repo.split("/")
@@ -229,6 +246,12 @@ def generate_landing_page(
     e_pip_index = html.escape(pip_index_url)
     e_repo = html.escape(repo)
     pip_cmd = html.escape(f"pip install PACKAGE --extra-index-url {pip_index_url}")
+    variant_links = " ".join(
+        f'<a href="{base_url}/{html.escape(cu)}/">{html.escape(cu)}/</a>' for cu in variants
+    )
+    variant_html = (
+        f'<p class="idx-url">CUDA indexes:&nbsp;{variant_links}</p>' if variants else ""
+    )
 
     rows_html = []
     for name in sorted(packages.keys()):
@@ -425,6 +448,7 @@ def generate_landing_page(
       <button class="copy-btn" onclick="doCopy(this)">Copy</button>
     </div>
     <p class="idx-url">Index URL:&nbsp;<a href="{e_pip_index}">{e_pip_index}</a></p>
+    {variant_html}
   </div>
 
   <div class="search-row">
@@ -525,7 +549,14 @@ def main():
 
     output_dir.mkdir(parents=True, exist_ok=True)
     generate_simple_index(packages, output_dir)
-    generate_landing_page(packages, latest_versions, repo, output_dir)
+    variants = cuda_variants(packages)
+    for cu, pkgs in variants.items():
+        generate_simple_index(pkgs, output_dir, cu)
+        print(f"  /{cu}/: {', '.join(sorted(pkgs))}")
+    generate_landing_page(
+        packages, latest_versions, repo, output_dir,
+        sorted(variants, key=lambda cu: int(cu[2:])),
+    )
 
     print(f"Index written to {output_dir}/")
 
