@@ -3,6 +3,9 @@ name: TA-Lib (Windows)
 # 每週檢查上游：ta-lib（PyPI）、TA-Lib C 函式庫（最新 tag）、最新 3 個穩定 CPython。
 # 只編譯 Release 裡還沒有的 Python 版本；force 會全部重新編譯。
 on:
+  push: # TEMP: 合併前移除
+    branches: [claude/pensive-goodall-vgnvsr]
+    paths: [.github/workflows/talib.yml, .github/scripts/**]
   schedule:
     - cron: "17 3 * * 1" # 每週一 03:17 UTC
   workflow_dispatch:

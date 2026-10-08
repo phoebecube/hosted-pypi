@@ -106,25 +106,42 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          python -m pip wheel . --no-build-isolation --no-deps -w ..\dist
-          Get-ChildItem ..\dist
+          python -m pip wheel . --no-build-isolation --no-deps -w ..\build-out
+          Get-ChildItem ..\build-out
 
-      - name: Check wheel
+      # abi3 時把同一份二進位標成每個 Python 版本各一個 wheel（cp312-cp312 …），組成 CUDA × Python 矩陣。
+      - name: Tag wheels per Python
         shell: pwsh
+        env:
+          RETAG: ${{ matrix.retag }}
+          WHEELS: ${{ matrix.wheels }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $wheel = "dist\${{ matrix.wheel }}"
-          if (-not (Test-Path $wheel)) { throw "expected $wheel" }
-          python -m zipfile -l $wheel
-          $names = python -m zipfile -l $wheel | Out-String
-          foreach ($mod in @('_fused', '_qattn_sm80', '_qattn_sm89')) {
-            if ($names -notmatch "sageattention/$mod\.[^ ]*pyd") { throw "missing $mod in wheel" }
+          $PSNativeCommandUseErrorActionPreference = $true
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $built = @(Get-ChildItem build-out\*.whl)
+          if ($built.Count -ne 1) { throw "expected exactly one built wheel, got $($built.Count)" }
+          if ($env:RETAG) {
+            foreach ($tag in $env:RETAG.Split(' ')) {
+              python -m wheel tags --python-tag $tag --abi-tag $tag $built[0].FullName
+            }
+            Move-Item build-out\*.whl dist -Exclude $built[0].Name
+          } else {
+            Move-Item $built[0].FullName dist
+          }
+          foreach ($wheel in $env:WHEELS.Split(' ')) {
+            if (-not (Test-Path "dist\$wheel")) { throw "expected dist\$wheel" }
+            $names = python -m zipfile -l "dist\$wheel" | Out-String
+            foreach ($mod in @('_fused', '_qattn_sm80', '_qattn_sm89')) {
+              if ($names -notmatch "sageattention/$mod\.[^ ]*pyd") { throw "missing $mod in $wheel" }
+            }
+            Write-Output "OK $wheel"
           }
 
       - uses: actions/upload-artifact@v7
         with:
           name: wheel-sageattention-${{ matrix.cu }}-py${{ matrix.python }}
-          path: dist/${{ matrix.wheel }}
+          path: dist/*.whl
           if-no-files-found: error
 
   release:

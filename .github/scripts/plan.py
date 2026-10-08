@@ -177,16 +177,22 @@ def plan_sageattention(force):
         usable = [py for py in pythons if py in variants[cu]]
         if not usable:
             continue
-        # abi3 wheels (cp310-abi3) run on every Python >= 3.10: build once per CUDA.
-        targets = [(usable[-1], "cp310-abi3")] if abi3 else [(py, f"{cp(py)}-{cp(py)}") for py in usable]
-        for py, pytag in targets:
-            prefix = f"sageattention-{version}+{cu}-{pytag}-"
-            if any(n.startswith(prefix) and n.endswith("win_amd64.whl") for n in have):
-                continue
-            matrix.append({
-                "cu": cu, "cuda": cuda, "python": py, "archs": arch_list,
-                "wheel": prefix + "win_amd64.whl",
-            })
+        wheels = [f"sageattention-{version}+{cu}-{cp(py)}-{cp(py)}-win_amd64.whl" for py in usable]
+        if abi3:
+            # Upstream builds a cp310-abi3 binary that runs on every Python >= 3.10:
+            # compile once per CUDA, then retag it into one wheel per Python version.
+            if force or not set(wheels) <= have:
+                matrix.append({
+                    "cu": cu, "cuda": cuda, "python": usable[-1], "archs": arch_list,
+                    "retag": " ".join(cp(py) for py in usable), "wheels": " ".join(wheels),
+                })
+        else:
+            for py, wheel in zip(usable, wheels):
+                if force or wheel not in have:
+                    matrix.append({
+                        "cu": cu, "cuda": cuda, "python": py, "archs": arch_list,
+                        "retag": "", "wheels": wheel,
+                    })
     return {
         "version": version, "git_tag": git_tag, "post": post, "torch": torch_version,
         "cuda_variants": " ".join(sorted(variants, key=vkey)), "abi3": str(abi3).lower(), "tag": tag,
@@ -211,7 +217,7 @@ def main():
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
             f.write(f"### {package} {info['version']}\n\n")
             f.write("\n".join(f"- `{k}`: `{v}`" for k, v in info.items()) + "\n\n")
-            f.write("**To build:**\n\n" + ("\n".join(f"- `{m['wheel']}`" for m in matrix) or "- nothing, Release is up to date") + "\n")
+            f.write("**To build:**\n\n" + ("\n".join(f"- `{m.get('wheel') or m['wheels']}`" for m in matrix) or "- nothing, Release is up to date") + "\n")
 
 
 if __name__ == "__main__":
