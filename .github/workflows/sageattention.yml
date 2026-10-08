@@ -88,11 +88,13 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           python -m pip install -q uv
           python -m uv pip install --system "torch==${{ needs.plan.outputs.torch }}" --index-url "https://download.pytorch.org/whl/${{ matrix.cu }}"
-          python -m uv pip install --system numpy packaging setuptools wheel
+          python -m uv pip install --system numpy packaging setuptools wheel ninja
           python -c "import torch; print(torch.__version__, torch.version.cuda)"
           nvcc --version
 
-      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
 
       - name: Build wheel
         shell: pwsh
@@ -106,7 +108,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          python -m pip wheel . --no-build-isolation --no-deps -w ..\build-out
+          python -m pip wheel . -v --no-build-isolation --no-deps -w ..\build-out
           Get-ChildItem ..\build-out
 
       # abi3 時把同一份二進位標成每個 Python 版本各一個 wheel（cp312-cp312 …），組成 CUDA × Python 矩陣。

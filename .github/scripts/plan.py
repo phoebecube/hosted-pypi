@@ -109,6 +109,18 @@ def plan_talib(force):
         sys.exit(f"{TALIB_PY_REPO} has no tag v{version}")
     c_tags = [t[1:] for t in git_tags(TALIB_C_REPO) if re.fullmatch(r"v\d+\.\d+\.\d+", t)]
     c_version = max(c_tags, key=vkey)
+    # Prefer the official prebuilt Windows x64 package over compiling the C library.
+    c_prebuilt = ""
+    try:
+        rel = get_json(
+            f"https://api.github.com/repos/{TALIB_C_REPO}/releases/tags/v{c_version}",
+            os.environ.get("GITHUB_TOKEN"),
+        )
+        for a in rel.get("assets", []):
+            if re.fullmatch(r"ta-lib-[\d.]+-windows-x86_64\.zip", a["name"]):
+                c_prebuilt = a["browser_download_url"]
+    except urllib.error.HTTPError as e:
+        print(f"no prebuilt TA-Lib C package ({e.code}), will build from source", file=sys.stderr)
 
     tag = f"talib-v{version}"
     have = set() if force else release_assets(tag)
@@ -117,7 +129,7 @@ def plan_talib(force):
         wheel = f"ta_lib-{version}-{cp(py)}-{cp(py)}-win_amd64.whl"
         if wheel not in have:
             matrix.append({"python": py, "wheel": wheel})
-    return {"version": version, "c_version": c_version, "tag": tag}, matrix
+    return {"version": version, "c_version": c_version, "c_prebuilt": c_prebuilt, "tag": tag}, matrix
 
 
 # ── SageAttention ─────────────────────────────────────────────────────────────

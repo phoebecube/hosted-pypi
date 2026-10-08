@@ -33,6 +33,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       version: ${{ steps.plan.outputs.version }}
       c_version: ${{ steps.plan.outputs.c_version }}
+      c_prebuilt: ${{ steps.plan.outputs.c_prebuilt }}
       tag: ${{ steps.plan.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
@@ -62,18 +63,42 @@ jobs:
           ref: v${{ needs.plan.outputs.version }}
           path: ta-lib-python
 
-      # C 函式庫只跟 C 版本有關：每個版本只編一次，之後各 Python 直接用快取。
+      # C 函式庫只跟 C 版本有關：優先用官方預編譯包，沒有才自己編；結果依版本快取。
       - id: cache
         uses: actions/cache@v6
         with:
           path: ta-lib-c
-          key: ta-lib-c-${{ needs.plan.outputs.c_version }}-win64-msvc
+          key: ta-lib-c-${{ needs.plan.outputs.c_version }}-win64
 
-      - if: steps.cache.outputs.cache-hit != 'true'
-        uses: ilammy/msvc-dev-cmd@v1
+      - name: Fetch official TA-Lib C ${{ needs.plan.outputs.c_version }} build
+        id: prebuilt
+        if: steps.cache.outputs.cache-hit != 'true' && needs.plan.outputs.c_prebuilt != ''
+        continue-on-error: true
+        shell: pwsh
+        env:
+          URL: ${{ needs.plan.outputs.c_prebuilt }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $dir = "$env:RUNNER_TEMP\ta-lib-prebuilt"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          curl.exe -fsSL -o "$dir.zip" $env:URL
+          tar -xf "$dir.zip" -C $dir
+          $lib = Get-ChildItem $dir -Recurse -Filter ta-lib-static.lib | Select-Object -First 1
+          $hdr = Get-ChildItem $dir -Recurse -Filter ta_defs.h | Select-Object -First 1
+          if (-not $lib -or -not $hdr) { throw "unexpected layout in $env:URL" }
+          New-Item -ItemType Directory -Force "$env:TALIB_C\include\ta-lib", "$env:TALIB_C\lib" | Out-Null
+          Copy-Item "$($hdr.DirectoryName)\*.h" "$env:TALIB_C\include\ta-lib"
+          Copy-Item "$($hdr.DirectoryName)\*.h" "$env:TALIB_C\include"
+          Copy-Item $lib.FullName "$env:TALIB_C\lib"
 
-      - name: Build TA-Lib C ${{ needs.plan.outputs.c_version }}
-        if: steps.cache.outputs.cache-hit != 'true'
+      - if: steps.cache.outputs.cache-hit != 'true' && steps.prebuilt.outcome != 'success'
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+
+      - name: Build TA-Lib C ${{ needs.plan.outputs.c_version }} from source
+        if: steps.cache.outputs.cache-hit != 'true' && steps.prebuilt.outcome != 'success'
         shell: pwsh
         env:
           C_VERSION: ${{ needs.plan.outputs.c_version }}
