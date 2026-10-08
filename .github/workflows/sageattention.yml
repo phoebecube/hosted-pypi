@@ -82,7 +82,7 @@ jobs:
         run: python .github/scripts/install_cuda.py ${{ matrix.cuda }} "${{ runner.temp }}\cuda"
 
       # torch 每次重編多半是因為它出新版，快取命中不了，所以不開 uv 快取。
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: false
 
