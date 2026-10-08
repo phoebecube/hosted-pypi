@@ -1,9 +1,8 @@
 version: 2
 updates:
-  # GitHub Actions：每天检查 action 版本。
-  # minor/patch 合并到一个 PR，major 单独开 PR，避免 Node runtime 这种大变更被埋在大杂烩里。
-  # TA-Lib 版本（TALIB_PY_VER / TALIB_C_VER）和 CIBW_BUILD 均由 update-versions.yml 管理，
-  # 统一写入 .github/.env，talib.yml 从 .env 加载——Dependabot 无法追踪 PyPI/GH Releases 并写入 env。
+  # 只更新 workflow 裡的 action 版本。
+  # minor/patch 合併成一個 PR，major 單獨開 PR。
+  # 套件、Python、torch、CUDA 版本不寫在倉庫裡，每次執行由 .github/scripts/plan.py 向上游查詢。
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

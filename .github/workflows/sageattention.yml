@@ -1,0 +1,144 @@
+name: SageAttention2 (Windows)
+
+# 每週檢查上游：woct0rdho/SageAttention 最新 v*-windows* tag、PyPI 最新 torch
+# 及其在 Windows 上提供的 cuXXX、每個 cuXXX 對應的最新 CUDA 修補版、最新 3 個穩定 CPython。
+# 上游是 abi3 時每個 CUDA 只編一次（一個 wheel 適用全部 Python），否則每個 Python 各編一次。
+# 只編譯 Release 裡還沒有的組合；force 會全部重新編譯。
+on:
+  schedule:
+    - cron: "37 3 * * 1" # 每週一 03:37 UTC
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "全部重新編譯（覆蓋 Release 裡已有的 wheel）"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # 要編譯的 GPU 架構（RTX 30 / 40 / 50、A100、H100）；CUDA 版本不支援的會自動略過。
+  SAGE_ARCHS: "8.0 8.6 8.9 9.0 12.0"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      version: ${{ steps.plan.outputs.version }}
+      git_tag: ${{ steps.plan.outputs.git_tag }}
+      post: ${{ steps.plan.outputs.post }}
+      torch: ${{ steps.plan.outputs.torch }}
+      cuda_variants: ${{ steps.plan.outputs.cuda_variants }}
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+
+      - id: plan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ inputs.force || false }}
+        run: python3 .github/scripts/plan.py sageattention
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    name: ${{ matrix.cu }} (CUDA ${{ matrix.cuda }}, py${{ matrix.python }})
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+
+      - uses: actions/checkout@v7
+        with:
+          repository: woct0rdho/SageAttention
+          ref: ${{ needs.plan.outputs.git_tag }}
+          path: SageAttention
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      # 只下載 nvcc / cudart / CCCL（CUDA 13 另含 CRT、NVVM），約 100 MB，不跑官方安裝程式。
+      - name: Install CUDA ${{ matrix.cuda }}
+        run: python .github/scripts/install_cuda.py ${{ matrix.cuda }} "${{ runner.temp }}\cuda"
+
+      - name: Install torch ${{ needs.plan.outputs.torch }}+${{ matrix.cu }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install -q uv
+          python -m uv pip install --system "torch==${{ needs.plan.outputs.torch }}" --index-url "https://download.pytorch.org/whl/${{ matrix.cu }}"
+          python -m uv pip install --system numpy packaging setuptools wheel
+          python -c "import torch; print(torch.__version__, torch.version.cuda)"
+          nvcc --version
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build wheel
+        shell: pwsh
+        working-directory: SageAttention
+        env:
+          DISTUTILS_USE_SDK: "1"
+          TORCH_CUDA_ARCH_LIST: ${{ matrix.archs }}
+          SAGEATTENTION_WHEEL_VERSION_SUFFIX: ${{ needs.plan.outputs.post }}+${{ matrix.cu }}
+          # 避免 runner 上的 MSVC 比該版 nvcc 新而被拒絕。
+          NVCC_APPEND_FLAGS: -allow-unsupported-compiler
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip wheel . --no-build-isolation --no-deps -w ..\dist
+          Get-ChildItem ..\dist
+
+      - name: Check wheel
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $wheel = "dist\${{ matrix.wheel }}"
+          if (-not (Test-Path $wheel)) { throw "expected $wheel" }
+          python -m zipfile -l $wheel
+          $names = python -m zipfile -l $wheel | Out-String
+          foreach ($mod in @('_fused', '_qattn_sm80', '_qattn_sm89')) {
+            if ($names -notmatch "sageattention/$mod\.[^ ]*pyd") { throw "missing $mod in wheel" }
+          }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheel-sageattention-${{ matrix.cu }}-py${{ matrix.python }}
+          path: dist/${{ matrix.wheel }}
+          if-no-files-found: error
+
+  release:
+    needs: [plan, build]
+    # 某個 CUDA 版本失敗不影響其他版本上傳。
+    if: ${{ !cancelled() && needs.plan.outputs.build == 'true' }}
+    uses: ./.github/workflows/publish.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+      title: SageAttention ${{ needs.plan.outputs.version }}
+      notes: "SageAttention2 ${{ needs.plan.outputs.version }}（woct0rdho/SageAttention `${{ needs.plan.outputs.git_tag }}`），Windows x64，以 torch ${{ needs.plan.outputs.torch }} 編譯，CUDA：${{ needs.plan.outputs.cuda_variants }}。"
+      install: |
+        pip install torch --index-url https://download.pytorch.org/whl/cu130
+        pip install sageattention --extra-index-url {index}/cu130/
+        # cu130 換成你的 torch 對應的 CUDA 版本
+      artifacts: wheel-sageattention-*
+    permissions:
+      contents: write
+      pages: write
+      id-token: write

@@ -1,5 +1,8 @@
 name: Update PyPI Index
 
+# 掃描所有 Release 的 wheel，產生 PEP 503 索引並部署到 GitHub Pages：
+#   /simple/   全部套件
+#   /cuXXX/    只含 +cuXXX 的 wheel（跟 PyTorch 官方索引一樣按 CUDA 分開）
 on:
   release:
     types: [published]
@@ -14,28 +17,26 @@ permissions:
   pages: write
   id-token: write
 
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
-
 jobs:
   generate-and-deploy:
     runs-on: ubuntu-latest
+    # 放在 job 層級，被其他 workflow 呼叫時也會排隊，不會同時部署。
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
         with:
-          python-version: "3.x"
+          sparse-checkout: .github/scripts
 
-      - name: 生成 PyPI 索引
+      - name: 產生 PyPI 索引
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OUTPUT_DIR: site
-        run: python .github/scripts/generate_index.py
+        run: python3 .github/scripts/generate_index.py
 
       - uses: actions/configure-pages@v6
 
@@ -46,4 +47,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
-

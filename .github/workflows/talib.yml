@@ -1,186 +1,137 @@
-name: Build TA-Lib Wheels
+name: TA-Lib (Windows)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 版本来源：.github/.env（由 update-versions.yml 每周自动更新，支持手动 dispatch）
-#   TALIB_PY_VER — ta-lib Python 包版本（PyPI）
-#   TALIB_C_VER  — TA-Lib C 库版本（GitHub Releases）
-#   CIBW_BUILD   — 最新 3 个 CPython 稳定版本（endoflife.date）
-#   CIBW_MANYLINUX_X86_64_IMAGE — manylinux x86_64 镜像版本（pypa/manylinux）
-# ──────────────────────────────────────────────────────────────────────────────
+# 每週檢查上游：ta-lib（PyPI）、TA-Lib C 函式庫（最新 tag）、最新 3 個穩定 CPython。
+# 只編譯 Release 裡還沒有的 Python 版本；force 會全部重新編譯。
 on:
-  push:
-    branches: [dev]
-    paths:
-      - ".github/workflows/talib.yml"
-      - ".github/.env"          # .env 版本更新后触发 wheel 重建（直推或合并 PR）
+  schedule:
+    - cron: "17 3 * * 1" # 每週一 03:17 UTC
   workflow_dispatch:
+    inputs:
+      force:
+        description: "全部重新編譯（覆蓋 Release 裡已有的 wheel）"
+        type: boolean
+        default: false
 
-env:
-  # 版本变量由 .github/.env 在各 job 第一步加载，此处只保留静态 cibuildwheel 配置
-  CIBW_BUILD_VERBOSITY: 2
-  CIBW_SKIP: "*-musllinux_*"
-  CIBW_BEFORE_BUILD: "pip install -U setuptools Cython wheel meson-python ninja && pip install -U numpy"
-  MSBUILDTREATHIGHERTOOLSVERSIONASCURRENT: 1
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 permissions:
-  contents: write
-  pages: write
-  id-token: write
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # ── 1. 构建 Windows AMD64 wheels ──────────────────────────────────────────
-  build_windows:
-    name: Windows AMD64
-    runs-on: windows-latest
-    env:
-      CIBW_ARCHS_WINDOWS: AMD64
-      # $TALIB_C_VER 由 "Load .env" 步骤注入宿主环境；cibuildwheel 构建时从宿主 env 展开此变量。
-      # job-level env: 不支持 ${{ env.X }}（Unrecognized named-value），用运行时变量。
-      # 使用绝对路径：package-dir: talib-py 改变 cibuildwheel 内工作目录，相对路径失效。
-      CIBW_ENVIRONMENT_WINDOWS: >-
-        TA_LIBRARY_PATH="$GITHUB_WORKSPACE/ta-lib-$TALIB_C_VER/_build;$LIB"
-        TA_INCLUDE_PATH="$GITHUB_WORKSPACE/ta-lib-$TALIB_C_VER/include;$INCLUDE"
-        PIP_NO_BUILD_ISOLATION=false
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Load versions from .env
-        shell: bash
-        run: cat .github/.env >> "$GITHUB_ENV"
-
-      - name: Checkout ta-lib-python source
-        uses: actions/checkout@v7
-        with:
-          repository: TA-Lib/ta-lib-python
-          ref: v${{ env.TALIB_PY_VER }}
-          path: talib-py
-
-      - name: Patch Cython source
-        shell: bash
-        run: find talib-py -name '*.pxi' -exec sed -i 's/__POLARS_SERIES/_POLARS_SERIES/g' {} +
-
-      - uses: TheMrMilchmann/setup-msvc-dev@v4
-        with:
-          arch: x64
-
-      - name: Build TA-Lib C library
-        shell: cmd
-        run: .github\scripts\talib\build-ta-lib-windows.cmd
-
-      - uses: pypa/cibuildwheel@v4.2.1
-        with:
-          package-dir: talib-py
-          output-dir: wheelhouse
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: wheels-talib-windows
-          path: wheelhouse/*.whl
-
-  # ── 2. 构建 Linux x86_64 wheels ───────────────────────────────────────────
-  build_linux:
-    name: Linux x86_64
+  plan:
     runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      version: ${{ steps.plan.outputs.version }}
+      c_version: ${{ steps.plan.outputs.c_version }}
+      tag: ${{ steps.plan.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
-
-      - name: Load versions from .env
-        run: cat .github/.env >> "$GITHUB_ENV"
-
-      - name: Checkout ta-lib-python source
-        uses: actions/checkout@v7
         with:
-          repository: TA-Lib/ta-lib-python
-          ref: v${{ env.TALIB_PY_VER }}
-          path: talib-py
+          sparse-checkout: .github/scripts
 
-      - name: Patch Cython source
-        run: find talib-py -name '*.pxi' -exec sed -i 's/__POLARS_SERIES/_POLARS_SERIES/g' {} +
-
-      - uses: pypa/cibuildwheel@v4.2.1
+      - id: plan
         env:
-          # step-level env: ${{ env.X }} 在步骤启动前展开为字面值。
-          # CIBW_BEFORE_ALL 在 manylinux 容器内执行，容器不继承宿主 env，$TALIB_C_VER 为空。
-          # 必须在此处用 ${{ env.TALIB_C_VER }} 展开为字面字符串后传入容器。
-          CIBW_ARCHS_LINUX: x86_64
-          CIBW_MANYLINUX_X86_64_IMAGE: ${{ env.CIBW_MANYLINUX_X86_64_IMAGE }}
-          CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair --only-plat -w {dest_dir} {wheel}"
-          CIBW_BEFORE_ALL_LINUX: "TALIB_C_VER=${{ env.TALIB_C_VER }} bash /project/.github/scripts/talib/build-ta-lib-linux.sh"
-          CIBW_ENVIRONMENT_LINUX: >-
-            TA_LIBRARY_PATH="/usr/local/lib"
-            TA_INCLUDE_PATH="/usr/local/include"
-            PIP_NO_BUILD_ISOLATION=false
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ inputs.force || false }}
+        run: python3 .github/scripts/plan.py talib
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    name: cp${{ matrix.python }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      TALIB_C: ${{ github.workspace }}\ta-lib-c
+    steps:
+      - uses: actions/checkout@v7
         with:
-          package-dir: talib-py
-          output-dir: wheelhouse
+          repository: TA-Lib/ta-lib-python
+          ref: v${{ needs.plan.outputs.version }}
+          path: ta-lib-python
+
+      # C 函式庫只跟 C 版本有關：每個版本只編一次，之後各 Python 直接用快取。
+      - id: cache
+        uses: actions/cache@v6
+        with:
+          path: ta-lib-c
+          key: ta-lib-c-${{ needs.plan.outputs.c_version }}-win64-msvc
+
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build TA-Lib C ${{ needs.plan.outputs.c_version }}
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          C_VERSION: ${{ needs.plan.outputs.c_version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $src = "$env:RUNNER_TEMP\ta-lib-src"
+          curl.exe -fsSL -o "$env:RUNNER_TEMP\ta-lib.zip" "https://github.com/TA-Lib/ta-lib/archive/refs/tags/v$env:C_VERSION.zip"
+          New-Item -ItemType Directory -Force $src | Out-Null
+          tar -xf "$env:RUNNER_TEMP\ta-lib.zip" -C $src
+          $root = (Get-ChildItem $src -Directory)[0].FullName
+          cmake -S $root -B "$root\_build" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBUILD_DEV_TOOLS=OFF
+          cmake --build "$root\_build" --target ta-lib-static
+          New-Item -ItemType Directory -Force "$env:TALIB_C\include\ta-lib", "$env:TALIB_C\lib" | Out-Null
+          Copy-Item "$root\include\*.h" "$env:TALIB_C\include\ta-lib"
+          Copy-Item "$root\include\*.h" "$env:TALIB_C\include"
+          Copy-Item "$root\_build\ta-lib-static.lib" "$env:TALIB_C\lib"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Build wheel
+        shell: pwsh
+        env:
+          TA_INCLUDE_PATH: ${{ env.TALIB_C }}\include
+          TA_LIBRARY_PATH: ${{ env.TALIB_C }}\lib
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install -q --upgrade pip
+          python -m pip wheel ./ta-lib-python --no-deps -w dist
+          Get-ChildItem dist
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if (-not (Test-Path "dist\${{ matrix.wheel }}")) { throw "expected dist\${{ matrix.wheel }}" }
+          python -m pip install -q "dist\${{ matrix.wheel }}"
+          python -c "import numpy, talib; print(talib.__version__, talib.__ta_version__); print(talib.SMA(numpy.arange(10.0), 3)[-1])"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: wheels-talib-linux
-          path: wheelhouse/*.whl
+          name: wheel-talib-cp${{ matrix.python }}
+          path: dist/${{ matrix.wheel }}
+          if-no-files-found: error
 
-  # ── 3. 发布 GitHub Release ─────────────────────────────────────────────────
   release:
-    needs: [build_windows, build_linux]
-    runs-on: ubuntu-latest
+    needs: [plan, build]
+    # 某個 Python 版本失敗不影響其他版本上傳。
+    if: ${{ !cancelled() && needs.plan.outputs.build == 'true' }}
+    uses: ./.github/workflows/publish.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+      artifacts: wheel-talib-*
+      title: TA-Lib ${{ needs.plan.outputs.version }}
+      notes: "TA-Lib ${{ needs.plan.outputs.version }}（TA-Lib C ${{ needs.plan.outputs.c_version }}），Windows x64。"
+      install: pip install ta-lib --extra-index-url {index}/simple/
     permissions:
       contents: write
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Load versions from .env
-        run: cat .github/.env >> "$GITHUB_ENV"
-
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: wheels-talib-*
-          merge-multiple: true
-          path: dist/
-
-      - name: 删除旧 Release 与 Tag
-        uses: actions/github-script@v9
-        env:
-          RELEASE_TAG: ${{ format('talib-v{0}', env.TALIB_PY_VER) }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const tag = process.env.RELEASE_TAG;
-
-            try {
-              const { data: release } = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
-              await github.rest.repos.deleteRelease({ owner, repo, release_id: release.id });
-              core.info(`Deleted release for ${tag}`);
-            } catch (error) {
-              if (error.status !== 404) throw error;
-              core.info(`No existing release for ${tag}`);
-            }
-
-            try {
-              await github.rest.git.deleteRef({ owner, repo, ref: `tags/${tag}` });
-              core.info(`Deleted tag ${tag}`);
-            } catch (error) {
-              if (![404, 422].includes(error.status)) throw error;
-              core.info(`No existing tag ${tag}`);
-            }
-
-      - uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ format('talib-v{0}', env.TALIB_PY_VER) }}
-          target_commitish: ${{ github.sha }}
-          name: "${{ format('talib-v{0}', env.TALIB_PY_VER) }}"
-          overwrite_files: true
-          files: |
-            dist/*.whl
-
-  # ── 4. 更新 PyPI 静态索引 ──────────────────────────────────────────────────
-  update-index:
-    needs: release
-    uses: ./.github/workflows/update-index.yml
-    secrets: inherit
-    permissions:
-      contents: read
       pages: write
       id-token: write

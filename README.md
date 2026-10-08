@@ -1,87 +1,69 @@
-# GitHub Pages PyPI
+# hosted-pypi
 
-用 GitHub Releases 存包，用 GitHub Pages 提供 PEP 503 simple index。
+每週自動檢查上游，在 GitHub Actions 上編譯 **Windows x64** wheel，放進 GitHub Releases，再用 GitHub Pages 提供 pip 可以直接用的索引（PEP 503）。
 
-## 你真正需要知道的
+倉庫裡只有工作流程和它們用到的腳本，不寫死任何版本號。
 
-- 索引地址：`https://<user>.github.io/<repo>/simple/`
-- 默认构建平台：Windows x64、Linux x86_64
-- tag / Release 命名：`a-v1.0.0`、`b-v1.0.1`、`talib-v0.6.8`
-- 如果重复构建同一版本，会先删掉同版本旧 tag / Release，再在新 commit 上重建同名 tag / Release
-- Release 名称和 tag 保持一致
-- 不再生成 `SHA256SUMS.txt`
-
-## 关键工作流
-
-- `build-a.yml`：纯 Python 包示例
-- `build-b.yml`：编译包示例
-- `build-external-template.yml`：外部构建模板
-- `talib.yml`：TA-Lib 专用构建
-- `update-index.yml`：扫描 Release，更新 Pages 索引
-- `update-versions.yml`：更新 `.github/.env` 中的 TA-Lib / Python 构建变量
-- `cleanup-legacy-releases.yml`：一次性清掉历史遗留的非版本化 tag / Release（如 `a`、`b`、`talib`、`*-latest`）
-
-## 快速使用
-
-安装：
+## 安裝
 
 ```bash
-pip install <package> --extra-index-url https://<user>.github.io/<repo>/simple/
+# TA-Lib
+pip install ta-lib --extra-index-url https://<owner>.github.io/<repo>/simple/
+
+# SageAttention2：CUDA 版本要跟你的 torch 一致（cu126 / cu130 / cu132 …）
+pip install torch --index-url https://download.pytorch.org/whl/cu130
+pip install sageattention --extra-index-url https://<owner>.github.io/<repo>/cu130/
 ```
 
-持久配置：
+`/simple/` 列出全部套件；`/cuXXX/` 只列出該 CUDA 版本的 wheel，跟 PyTorch 官方索引的分法一樣，pip 才會選到對的 CUDA 版本。
 
-Linux: `~/.config/pip/pip.conf`
-Windows: `%APPDATA%\pip\pip.ini`
+## 編譯什麼
 
-```ini
-[global]
-extra-index-url = https://<user>.github.io/<repo>/simple/
-```
+每次執行都向上游查詢：
 
-## 发布规则
+| 項目 | 來源 |
+|------|------|
+| Python | GitHub Actions 能裝的 Windows x64 最新 3 個穩定版（現在 3.12 / 3.13 / 3.14；3.15 正式版出來後自動變成 3.13 / 3.14 / 3.15） |
+| TA-Lib | PyPI 上 `ta-lib` 最新版；TA-Lib C 函式庫取最新 tag |
+| SageAttention2 | [woct0rdho/SageAttention](https://github.com/woct0rdho/SageAttention) 最新 `v*-windows*` tag |
+| CUDA 組合 | PyPI 最新 torch 在 Windows 上提供的所有 `cuXXX`；CUDA 工具包取同版號最新修補版 |
 
-- 包版本来自 wheel / sdist 文件名，不来自 Git tag 名称
-- Git tag 和 Release 名称统一为 `<package>-v<version>`
-- 例如：`a-v1.0.0`、`b-v1.0.1`、`talib-v0.6.8`
-- 如果同一版本重新构建，workflow 只删除同名旧 tag / Release，然后把同名 tag 重新打到新的 commit
-- 历史错误命名（`a`、`b`、`talib`、`*-latest`）可用 `Cleanup Legacy Releases` 一次性清理
+- TA-Lib：每個 Python 版本各編一個 wheel。
+- SageAttention2：每個 `cuXXX` 各編一個。上游是 abi3（`cp310-abi3`）時，一個 wheel 就適用 Python 3.10 以上全部版本，所以每個 CUDA 只編一次；上游若不是 abi3，會自動改成每個 Python 各編一次。
+- 預設 GPU 架構 `8.0 8.6 8.9 9.0 12.0`（RTX 30 / 40 / 50、A100、H100），在 `sageattention.yml` 的 `SAGE_ARCHS` 修改；該 CUDA 版本不支援的架構會自動略過。
 
-## 新包怎么加
+為什麼用 woct0rdho 的分支：官方 thu-ml/SageAttention 的 setup.py 只支援 GCC，Windows 的 MSVC 編不起來；這個分支持續跟進官方，並修好了 Windows 編譯。
 
-- 纯 Python 包：复制 `build-a.yml`
-- 编译包：复制 `build-b.yml`
-- 外部构建：复制 `build-external-template.yml`
-- 改这几个字段：`PACKAGE_NAME`、版本写入路径、产物路径
+## 工作流程
 
-## Pages 前置条件
+| 檔案 | 用途 |
+|------|------|
+| `talib.yml` | TA-Lib：查版本 → 只編 Release 裡缺的 Python 版本 → 上傳 |
+| `sageattention.yml` | SageAttention2：查版本 → 只編 Release 裡缺的 CUDA 組合 → 上傳 |
+| `publish.yml` | 共用：把 wheel 加進 Release（`talib-v<版本>`、`sageattention-v<版本>`），再更新索引 |
+| `update-index.yml` | 掃描所有 Release，產生 Pages 索引（含 sha256） |
 
-- 仓库 Settings → Pages → Source 选 `GitHub Actions`
-- 如果 `github-pages` environment 要审批，去掉 Required reviewers
+| 腳本 | 用途 |
+|------|------|
+| `.github/scripts/plan.py` | 查上游版本、比對 Release 已有的 wheel，產生編譯矩陣 |
+| `.github/scripts/install_cuda.py` | 只從 NVIDIA redist 下載 nvcc / cudart / CCCL（CUDA 13 另含 CRT、NVVM），約 100 MB |
+| `.github/scripts/generate_index.py` | 產生 `/simple/` 和 `/cuXXX/` 索引 |
 
-## Token 规则
+每週一自動執行（只在預設分支），也可以在 Actions 頁面手動執行；勾選 `force` 會全部重新編譯。
 
-- `update-versions.yml` 使用 `peter-evans/create-pull-request@v8` 发 PR
-- 默认走 `GITHUB_TOKEN`
-- 仓库如果禁用了 GitHub Actions 创建 PR，要去 Settings → Actions → General 打开 `Allow GitHub Actions to create and approve pull requests`
-- `UPDATE_VERSIONS_TOKEN` 现在只是可选 override，可用 fine-grained PAT 或 GitHub App token，权限为 `contents:write`、`pull-requests:write`
+## 編譯效率
 
-## Dependabot 规则
+- 上游沒變化時只跑一個幾十秒的 Ubuntu 檢查 job，不開 Windows 機器。
+- 只補編 Release 裡還沒有的組合。
+- 各 Python / 各 CUDA 版本平行編譯，其中一個失敗不會擋住其他的上傳。
+- TA-Lib C 函式庫依版本快取，只編一次。
+- CUDA 不跑官方安裝程式，只下載編譯需要的元件。
 
-- Dependabot 只负责 workflow 里显式写死的 action 版本
-- 它不负责 `TALIB_PY_VER`、`TALIB_C_VER`、`CIBW_BUILD`，因为这些值在 `.github/.env`，由 `update-versions.yml` 维护
-- `actions/github-script@v7` 是 Node 20 runtime，所以会出现 Node 20 deprecated 警告
-- 现在已经改到 `actions/github-script@v8`，Node 24 runtime
-- Dependabot 现在改成每天检查 GitHub Actions；minor/patch 合并，major 单独开 PR，避免大版本升级被埋掉
+## 第一次設定
 
-## 常见问题
-
-- 索引没更新：手动跑 `Update PyPI Index`
-- 旧 tag 还在：手动跑 `Cleanup Legacy Releases`
-- `Create Pull Request` 被拒：先检查仓库是否开启了 GitHub Actions 创建 PR；需要时再补 `UPDATE_VERSIONS_TOKEN`
-- Pages 404：Pages Source 没设成 `GitHub Actions`
+- Settings → Pages → Source 選 `GitHub Actions`。
+- `github-pages` environment 如果要審批，拿掉 Required reviewers。
 
 ## License
 
 MIT
-
