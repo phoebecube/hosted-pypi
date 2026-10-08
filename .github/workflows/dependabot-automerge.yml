@@ -1,0 +1,29 @@
+name: Dependabot auto-merge
+
+# Dependabot 的 action 更新（含大版本）用 actionlint 檢查語法與參數，通過就直接合併，不等人工批准。
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      # 確認 PR 確實由 Dependabot 產生。
+      - uses: dependabot/fetch-metadata@v3
+
+      - uses: actions/checkout@v7
+
+      - name: actionlint
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+      - name: Merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge "$PR_URL" --squash --delete-branch

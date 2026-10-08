@@ -1,7 +1,7 @@
 version: 2
 updates:
-  # 只更新 workflow 裡的 action 版本。
-  # minor/patch 合併成一個 PR，major 單獨開 PR。
+  # 只更新 workflow 裡的 action 版本，所有更新（含大版本）合併成一個 PR，
+  # 由 dependabot-automerge.yml 檢查後自動合併。
   # 套件、Python、torch、CUDA 版本不寫在倉庫裡，每次執行由 .github/scripts/plan.py 向上游查詢。
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -9,11 +9,7 @@ updates:
       interval: "daily"
       time: "09:00"
       timezone: "UTC"
-    open-pull-requests-limit: 5
     groups:
-      github-actions-minor-patch:
+      github-actions:
         patterns:
           - "*"
-        update-types:
-          - minor
-          - patch

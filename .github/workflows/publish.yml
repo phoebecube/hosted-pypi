@@ -64,7 +64,7 @@ jobs:
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release edit "$TAG" --title "$TITLE" --notes "$body"
           else
-            gh release create "$TAG" --title "$TITLE" --notes "$body" --target "$GITHUB_SHA"
+            gh release create "$TAG" --title "$TITLE" --notes "$body"
           fi
           gh release upload "$TAG" "${wheels[@]}" --clobber
           printf -- '- %s\n' "${wheels[@]##*/}" >> "$GITHUB_STEP_SUMMARY"

@@ -29,7 +29,7 @@ pip install sageattention --extra-index-url https://<owner>.github.io/<repo>/cu1
 | CUDA 組合 | PyPI 最新 torch 在 Windows 上提供的所有 `cuXXX`；CUDA 工具包取同版號最新修補版 |
 
 - TA-Lib：每個 Python 版本各編一個 wheel。
-- SageAttention2：每個 `cuXXX` 各編一個。上游是 abi3（`cp310-abi3`）時，一個 wheel 就適用 Python 3.10 以上全部版本，所以每個 CUDA 只編一次；上游若不是 abi3，會自動改成每個 Python 各編一次。
+- SageAttention2：CUDA × Python 交叉矩陣（例如 cu130 × cp312 / cp313 / cp314）。上游是 abi3（穩定 ABI）時，每個 CUDA 只編譯一次，再把同一份二進位標成各 Python 版本的 wheel；上游若不是 abi3，會自動改成每個 Python 各編一次。
 - 預設 GPU 架構 `8.0 8.6 8.9 9.0 12.0`（RTX 30 / 40 / 50、A100、H100），在 `sageattention.yml` 的 `SAGE_ARCHS` 修改；該 CUDA 版本不支援的架構會自動略過。
 
 為什麼用 woct0rdho 的分支：官方 thu-ml/SageAttention 的 setup.py 只支援 GCC，Windows 的 MSVC 編不起來；這個分支持續跟進官方，並修好了 Windows 編譯。
@@ -42,6 +42,7 @@ pip install sageattention --extra-index-url https://<owner>.github.io/<repo>/cu1
 | `sageattention.yml` | SageAttention2：查版本 → 只編 Release 裡缺的 CUDA 組合 → 上傳 |
 | `publish.yml` | 共用：把 wheel 加進 Release（`talib-v<版本>`、`sageattention-v<版本>`），再更新索引 |
 | `update-index.yml` | 掃描所有 Release，產生 Pages 索引（含 sha256） |
+| `dependabot-automerge.yml` | Dependabot 的 action 更新（含大版本）通過 actionlint 檢查後自動合併 |
 
 | 腳本 | 用途 |
 |------|------|
@@ -56,8 +57,9 @@ pip install sageattention --extra-index-url https://<owner>.github.io/<repo>/cu1
 - 上游沒變化時只跑一個幾十秒的 Ubuntu 檢查 job，不開 Windows 機器。
 - 只補編 Release 裡還沒有的組合。
 - 各 Python / 各 CUDA 版本平行編譯，其中一個失敗不會擋住其他的上傳。
-- TA-Lib C 函式庫依版本快取，只編一次。
-- CUDA 不跑官方安裝程式，只下載編譯需要的元件。
+- TA-Lib C 函式庫優先用官方預編譯包，沒有才自己編，結果依版本快取。
+- CUDA 不跑官方安裝程式，只下載編譯需要的元件（約 5 秒）。
+- torch 用 `astral-sh/setup-uv` 安裝；不快取，因為需要重編時通常就是 torch 出了新版。
 
 ## 第一次設定
 

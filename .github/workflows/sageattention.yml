@@ -81,14 +81,18 @@ jobs:
       - name: Install CUDA ${{ matrix.cuda }}
         run: python .github/scripts/install_cuda.py ${{ matrix.cuda }} "${{ runner.temp }}\cuda"
 
+      # torch 每次重編多半是因為它出新版，快取命中不了，所以不開 uv 快取。
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: false
+
       - name: Install torch ${{ needs.plan.outputs.torch }}+${{ matrix.cu }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          python -m pip install -q uv
-          python -m uv pip install --system "torch==${{ needs.plan.outputs.torch }}" --index-url "https://download.pytorch.org/whl/${{ matrix.cu }}"
-          python -m uv pip install --system numpy packaging setuptools wheel ninja
+          uv pip install --system "torch==${{ needs.plan.outputs.torch }}" --index-url "https://download.pytorch.org/whl/${{ matrix.cu }}"
+          uv pip install --system numpy packaging setuptools wheel ninja
           python -c "import torch; print(torch.__version__, torch.version.cuda)"
           nvcc --version
 
