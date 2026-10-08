@@ -121,6 +121,12 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: false
+
+      # 上游 tag 已附 Cython 產生好的 talib/_ta_lib.c：不裝 Cython 直接編 C，省掉隔離環境和轉譯。
+      # 若現成的 C 檔跟新版 Python 不相容而失敗，退回用 Cython 重新產生。
       - name: Build wheel
         shell: pwsh
         env:
@@ -128,9 +134,15 @@ jobs:
           TA_LIBRARY_PATH: ${{ env.TALIB_C }}\lib
         run: |
           $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          python -m pip install -q --upgrade pip
-          python -m pip wheel ./ta-lib-python --no-deps -w dist
+          uv pip install --system setuptools wheel numpy
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          python -m pip wheel ./ta-lib-python --no-build-isolation --no-deps -w dist
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output "::warning::prebuilt _ta_lib.c failed, regenerating with Cython"
+            Remove-Item -Recurse -Force ta-lib-python\build -ErrorAction SilentlyContinue
+            python -m pip wheel ./ta-lib-python --no-deps -w dist
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
           Get-ChildItem dist
 
       - name: Smoke test
